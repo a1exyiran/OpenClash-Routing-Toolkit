@@ -10,11 +10,11 @@
 > [!IMPORTANT]
 > 只适用于你自己管理、并且已经在用 OpenClash 和 Mihomo 的机器。先预览，你确认后再写入。仓库里的示例只有占位符，请不要提交或截图真实订阅、证书、节点套餐、IP 或家用路径。`curl | bash` 不是默认安装方式，也不保证兼容所有版本。
 
-现在能公开的是已经跑通过的方法和脚本（见 [`scripts/`](scripts/)）。通用配置解析和 Agent 安装器还在做。
+现在能公开的是已经跑通过的方法和脚本（见 [`scripts/`](scripts/)）。注入脚本会读取 `config.yaml` 里的 `claude.node_match` 与 `claude.alias`。通用安装器还在做。
 
 ## 它做什么
 
-启动时钩子只做离线注入，订阅更新放在内核还在跑的时候。校验通过再原子替换，回滚默认先检查。实际场景是：Claude / Anthropic 自有流量走你指定的纯净 IP 出口，其余流量保持原策略。请用你自己的两条订阅和组名，不要照搬仓库里的历史对象。
+启动时钩子只做离线注入，订阅更新放在内核还在跑的时候。校验通过再原子替换，回滚默认先检查。实际场景是：Claude / Anthropic 自有流量走你指定的纯净 IP 出口，其余流量保持原策略。请用你自己的订阅，并在配置里填写要钉死的节点匹配规则和别名，不要照搬示例值。
 
 这不是图形面板，也还不是可以对任意路由器一键执行的发行版。
 
@@ -45,16 +45,16 @@ CLASH_T=PASS
 把仓库地址换成你的克隆或 fork，把下面整段发给助手。**它应先检查、先预览；未经你确认，不得写入任何文件、不得重启服务。**
 
 ```text
-请先阅读这个仓库的 AGENTS.md 和 SKILL.md，检查我的 OpenWrt/OpenClash 环境，只预览将要改动的文件，未经我确认不要写入或重启服务：https://github.com/a1exyiran/OpenClash-Routing-Toolkit
+请先阅读这个仓库 main 分支的 AGENTS.md 和 SKILL.md（https://raw.githubusercontent.com/a1exyiran/OpenClash-Routing-Toolkit/main/AGENTS.md 与 https://raw.githubusercontent.com/a1exyiran/OpenClash-Routing-Toolkit/main/SKILL.md），检查我的 OpenWrt/OpenClash 环境，只预览将要改动的文件，未经我确认不要写入或重启服务。仓库：https://github.com/a1exyiran/OpenClash-Routing-Toolkit
 ```
 
-这句话现在就可以用来约束助手。通用安装器（读你的 `config.yaml` 并真正落地）仍为 **即将提供 / 待实现**，不要把它理解成已经能一键改路由器。只读探测可以用：
+这句话现在就可以用来约束助手。通用安装器（`install.sh --dry-run` / `--apply`）仍为 **即将提供 / 待实现**，不要把它理解成已经能一键改路由器。只读探测可以用：
 
 ```sh
 ./install.sh --check
 ```
 
-`--dry-run` 和 `--apply` 尚未实现，脚本会拒绝执行。不要改用 `curl | bash`。工作脚本在 [`scripts/`](scripts/)，按下面的手动安装步骤预览后再用，不要把它们当成一键安装器。
+`install.sh --dry-run` 和 `--apply` 尚未实现，脚本会拒绝执行。不要改用 `curl | bash`。工作脚本在 [`scripts/`](scripts/)，按下面的手动安装步骤预览后再用，不要把它们当成一键安装器。
 
 ## 典型场景
 
@@ -72,10 +72,10 @@ CLASH_T=PASS
 在 Agent 安装器落地之前，这是正经路径。详细步骤见 [`docs/workflow.md`](docs/workflow.md)。
 
 1. 确认环境：OpenWrt / ImmortalWrt，已安装 OpenClash 与 Mihomo，知道生效配置路径；看可用内存（历史机器只有 485 MB、无 swap，内存紧张时不要强行全量 `clash -t`）。
-2. 准备你自己的配置，参考 [`config.example.yaml`](config.example.yaml)。订阅放在路由器上权限收紧的单独文件里，不要写进 Git。
+2. 复制 [`config.example.yaml`](config.example.yaml) 为 `config.yaml`，填写 `claude.node_match`（Ruby 正则，必须恰好命中一个订阅节点）和 `claude.alias`（改名后的显示名，会成为 `Claude专用` 组的首位）。示例值 `美国01` / `Claude-Node` 只是占位，必须改成你自己的。通过 `CLAUDE_CONFIG` 或放到 `$CLAUDE_CFG_DIR/config.yaml` 提供该文件。订阅放在路由器上权限收紧的单独文件里，不要写进 Git。
 3. 备份：当前钩子、生效配置、`/etc/openclash/custom/` 里将被替换的文件；记下哈希。
-4. 在临时目录预览构建，确认产物结构，必要时再做 `clash -t`。脚本在 [`scripts/`](scripts/)，组名和规则要改成你自己的。
-5. 你确认预览无误后，再把经过核验的脚本放到自定义目录，按你的维护窗口决定是否重启。
+4. 在临时目录预览构建，确认产物结构，必要时再做 `clash -t`。例如：`CLAUDE_CONFIG=./config.yaml ./scripts/claude_inject.sh --dry-run /path/to/current.yaml`。`Claude专用` 是项目的功能组名，节点名则来自你的配置。
+5. 你确认预览无误后，再把经过核验的脚本和 `config.yaml` 放到自定义目录，按你的维护窗口决定是否重启。
 6. 按上一节的表格做验证。
 
 ## 验证
@@ -123,12 +123,12 @@ OpenClash 的自定义覆盖钩子发生在内核启动之前。钩子跑起来�
 
 ## 配置
 
-- 使用 [`config.example.yaml`](config.example.yaml) 做清单。解析落地仍为待实现。
+- 使用 [`config.example.yaml`](config.example.yaml) 复制为 `config.yaml`。注入脚本会读取 `claude.node_match` 与 `claude.alias`；缺少任一项都会拒绝执行。
 - 占位符是 `__NAME__` 形式，避免尖括号在 shell 里被当成重定向。占位符不是真实值。
 
 ## 限制与已知问题
 
-- 历史实现仍绑着当时那一组具体规则；通用配置驱动为待实现。
+- 域名规则和 `Claude专用` 组名目前仍是项目固定的；要钉死的节点改为从配置读取。
 - 未承诺兼容所有 OpenWrt / OpenClash / Mihomo 版本。历史环境：ImmortalWrt SNAPSHOT r32912，Linux 6.6.69，aarch64，Mihomo `alpha-g86257fc`。路由器型号和 OpenClash 版本在资料里未能确认。
 - 启动脚本不检查钩子返回码（残项 R-04），不能宣称完整失败关闭。
 - 部分后期变更缺少独立运行日志。

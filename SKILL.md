@@ -17,7 +17,7 @@ description: 在用户自己的 OpenWrt / OpenClash / Mihomo 路由器上，预�
 
 1. 目标是哪台机器，你将如何登录（不要让用户把密码写进仓库或聊天记录里长期保存）。
 2. 这次是否允许改配置、是否有维护窗口、是否允许重启 OpenClash。
-3. 配置文件在哪（参考 `config.example.yaml`）。没有就只做环境检查，不进入写入计划。
+3. 配置文件在哪（复制 `config.example.yaml` 为 `config.yaml`，必须有 `claude.node_match` 与 `claude.alias`）。没有这两项就只做环境检查，不进入写入计划。
 4. 订阅 / 凭据文件由用户自己放置；你只检查存在与权限，不把内容读到对话里。
 
 ## 流程
@@ -32,7 +32,7 @@ description: 在用户自己的 OpenWrt / OpenClash / Mihomo 路由器上，预�
 
 列出完整路径、将安装或替换的脚本、会不会重启、成功标准、回滚命令。若能在临时目录构建产物，做结构检查；内存足够时才建议全量 `clash -t`。
 
-`./install.sh --dry-run` 目前仍为 **待实现**，脚本会拒绝假装执行。工作脚本在 `scripts/`，按预览流程使用，不要当成一键安装器，也不要用 `curl | bash` 绕过预览。
+`./install.sh --dry-run` 目前仍为 **待实现**，脚本会拒绝假装执行。注入预览请用 `CLAUDE_CONFIG=./config.yaml ./scripts/claude_inject.sh --dry-run <配置副本>`。工作脚本在 `scripts/`，不要当成一键安装器，也不要用 `curl | bash` 绕过预览。
 
 ### 3. 等确认
 
@@ -59,7 +59,7 @@ description: 在用户自己的 OpenWrt / OpenClash / Mihomo 路由器上，预�
 - 锁竞态：宁可这次不注入，也不要和活着的持有者一起写。
 - 全量 `clash -t` 需要足够内存和正确的 `SAFE_PATHS`。
 - 启动脚本不检查钩子返回码（R-04），失败不等于自动停机。
-- 占位符不是可部署配置；`scripts/` 里的组名和规则要改成用户自己的。
+- 占位符和 `config.example.yaml` 里的示例节点不是可部署配置。`Claude专用` 是项目功能组名；要钉死的节点必须由用户的 `claude.node_match` / `claude.alias` 提供。
 
 ## 示例口令
 

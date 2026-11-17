@@ -6,9 +6,9 @@
 #
 # 用法：
 #   ./install.sh --help
-#   ./install.sh --check              # 只读探测本机（若在路由器上运行）
-#   ./install.sh --dry-run --config FILE   # 待实现
-#   ./install.sh --apply              # 明确拒绝：尚未实现
+#   ./install.sh --check [--config FILE]   # 只读探测本机；可检查配置键
+#   ./install.sh --dry-run --config FILE   # 待实现（注入预览请用 scripts/claude_inject.sh --dry-run）
+#   ./install.sh --apply                   # 明确拒绝：尚未实现
 
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
@@ -19,9 +19,12 @@ usage() {
 OpenClash Routing Toolkit installer (outline)
 
   --help              显示说明
-  --check             只读探测：系统、内存、OpenClash 目录、内核二进制、Ruby
+  --check [--config FILE]
+                      只读探测：系统、内存、OpenClash 目录、内核二进制、Ruby，
+                      以及 config.yaml 中的 claude.node_match / claude.alias
   --dry-run --config FILE
-                      待实现：按用户配置在临时目录构建并校验，不写生效配置
+                      待实现：按用户配置在临时目录构建并校验，不写生效配置。
+                      注入预览请用 scripts/claude_inject.sh --dry-run
   --apply             待实现：本版本会拒绝执行
 
 在实现完成前，请让 AI 助手阅读 AGENTS.md，先做检查并征求你的同意。
@@ -72,8 +75,51 @@ cmd_check() {
   else
     echo "unconfirmed: ruby not in PATH"
   fi
-  echo "-- config file for this toolkit"
-  echo "not checked here; pass --dry-run --config FILE when that command is implemented"
+  echo "-- toolkit config (claude.node_match / claude.alias)"
+  _cfg="${CONFIG:-${CLAUDE_CONFIG:-}}"
+  if [ -z "$_cfg" ] && [ -f ./config.yaml ]; then
+    _cfg=./config.yaml
+  fi
+  if [ -z "$_cfg" ]; then
+    echo "unconfirmed: no config.yaml given (pass --config FILE, or set CLAUDE_CONFIG)"
+    echo "  required keys: claude.node_match, claude.alias  (see config.example.yaml)"
+  elif [ ! -f "$_cfg" ]; then
+    echo "missing: $_cfg"
+  elif have ruby; then
+    ruby -ryaml -E UTF-8 -e '
+path = ARGV[0]
+begin
+  d = Psych.safe_load(File.read(path), permitted_classes: [], permitted_symbols: [], aliases: true)
+rescue Exception => e
+  puts "parse_error: #{path} (#{e.class})"
+  exit 0
+end
+c = d.is_a?(Hash) ? d["claude"] : nil
+unless c.is_a?(Hash)
+  puts "missing keys: claude.node_match, claude.alias  (#{path} has no claude: section)"
+  exit 0
+end
+m = c["node_match"].to_s.strip
+a = c["alias"].to_s.strip
+miss = []
+miss << "claude.node_match" if m.empty?
+miss << "claude.alias" if a.empty?
+if miss.empty?
+  begin
+    Regexp.new(m)
+    puts "ok: #{path}"
+    puts "  claude.node_match=#{m}"
+    puts "  claude.alias=#{a}"
+  rescue RegexpError => e
+    puts "invalid: claude.node_match is not a valid Ruby regexp (#{e.message})"
+  end
+else
+  puts "missing keys: #{miss.join(", ")}  in #{path}"
+end
+' "$_cfg"
+  else
+    echo "found: $_cfg (ruby not available, keys not parsed)"
+  fi
   echo
   echo "check finished. no files were written."
   echo "next: read AGENTS.md; do not run --apply (not implemented)."
@@ -99,7 +145,8 @@ case "$MODE" in
   dryrun)
     echo "待实现: --dry-run"
     echo "计划中的行为：读取 ${CONFIG:-MISSING_CONFIG}，在临时目录构建配置，不覆盖 /etc/openclash 下的生效文件，必要时调用 clash -t。"
-    echo "通用配置解析尚未落地，拒绝假装执行。"
+    echo "install.sh 的通用安装流程尚未落地，拒绝假装执行。注入预览请用："
+    echo "  CLAUDE_CONFIG=${CONFIG:-./config.yaml} ./scripts/claude_inject.sh --dry-run <配置副本>"
     exit 3
     ;;
   apply)

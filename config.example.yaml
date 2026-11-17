@@ -1,5 +1,16 @@
 # 复制为 config.yaml 后填你自己的值。不要把填好的文件提交进 Git。
-# 本文件的解析与自动落地目前为「待实现」。助手应拿它当清单，而不是假装已经能安装。
+#
+# scripts/claude_inject.sh 会读取 claude.node_match 与 claude.alias。
+# 没有这两项，注入会拒绝执行（没有内置的默认节点名）。
+# 完整安装器（install.sh --dry-run / --apply）仍为待实现。
+
+claude:
+  # 用于在订阅节点里找出要钉死的那一个。按 Ruby 正则匹配节点名，必须恰好命中 1 个。
+  # 下面是中性示例，请改成你自己的节点名特征。
+  node_match: "美国01"
+  # 改名后的显示名，会成为 Claude专用 组的首位（默认出口）。
+  # 不要使用 DIRECT、REJECT、Claude专用、ClaudeAuto、APNs推送 等保留名。
+  alias: "Claude-Node"
 
 router:
   # 目标主机如何登录，由你在本地提供；不要把密码写在这里

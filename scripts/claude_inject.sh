@@ -12,8 +12,12 @@
 #   CLAUDE_VERIFY_CORE=1        启用内核校验（默认关闭）
 #   CLAUDE_MIN_MEM_MB=220       内核校验所需最低 MemAvailable
 #   CLAUDE_CFG_DIR / CLAUDE_CACHE_DIR / CLAUDE_BACKUP_DIR / CLAUDE_LOG
+#   CLAUDE_CONFIG                配置文件路径（含 claude.node_match / claude.alias）
+#   CLAUDE_NODE_MATCH / CLAUDE_ALIAS
+#                                可覆盖配置文件中的对应字段
 #   CLAUDE_FETCH_VIA             指定下载代理，如 socks5h://127.0.0.1:7891
 #   CLAUDE_TEST_RAW              仅测试用：用本地文件代替订阅下载
+#   CLAUDE_DRYRUN_OUT            --dry-run 产物路径（默认 /tmp/claude_inject_dryrun.yaml）
 #
 # 为什么钩子必须用 --offline:
 #   OpenClash 的 Step 3（配置生成）发生在 start_run_core 之前，旧内核已停止，
@@ -34,6 +38,7 @@
 #   14 结构校验失败      15 原子写入失败
 #   16 内核校验失败（含降级配置）
 #   17 目标文件在构建期间被并发修改（拒绝写入，原文件保持不动）
+#   18 节点匹配失败（node_match 命中 0 个或多于 1 个，目标未改动）
 #   2  参数/环境错误     3  临时目录失败
 #   4  下载失败（且无缓存，已降级 REJECT-only 时仍返回 0）
 
@@ -41,8 +46,11 @@ set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-VERSION="1.0"
+VERSION="1.1"
 PROG="claude_inject"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=load_config.sh
+. "$SCRIPT_DIR/load_config.sh"
 CFG_DIR="${CLAUDE_CFG_DIR:-/etc/openclash/custom}"
 CRED_FILE="$CFG_DIR/claude_b.yaml"
 CACHE_DIR="${CLAUDE_CACHE_DIR:-$CFG_DIR/claude_cache}"
@@ -68,6 +76,8 @@ TARGET="${1:-}"
 
 [ -n "$TARGET" ] || { echo "usage: $PROG [--check|--dry-run] <target_config>" >&2; exit 2; }
 [ -f "$TARGET" ] || { echo "target not found: $TARGET" >&2; exit 2; }
+# 节点匹配必须来自配置，没有内置默认节点名
+toolkit_require_config || exit $?
 case "$TARGET" in
   "$CRED_FILE"|"$CACHE_DIR"/*) echo "refuse: target is a config artifact" >&2; exit 2 ;;
 esac
@@ -81,6 +91,7 @@ RUBY="${CLAUDE_RUBY:-ruby} -ryaml -E UTF-8"
 SHA() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
 say "===== start mode=$MODE target=$TARGET"
+say "config=${CLAUDE_CONFIG:-env} node_match=$CLAUDE_NODE_MATCH alias=$CLAUDE_ALIAS"
 SHA_BEFORE=$(SHA "$TARGET")
 say "sha_before=$SHA_BEFORE size=$(wc -c < "$TARGET" | tr -d ' ')"
 
@@ -154,10 +165,15 @@ ALLOWED = %w[ss ssr vmess vless trojan hysteria hysteria2 tuic snell http socks5
 PREFIX = 'B-'
 # 本方案自己注入的节点名有两种形态：
 #   B-<订阅原名>   —— 订阅节点原样加前缀
-#   B Taiwan 01    —— 改名后的显示名（按任务要求不带连字符）
+#   配置中的 claude.alias —— 改名后的显示名
 # 识别逻辑必须同时覆盖两者：只匹配 B- 会把别名当成机场 A 的节点，
 # 于是「判为与 A 冲突」在每次重建时丢掉这个节点。
-OURS = /\AB[- ]/
+ALIAS = ENV['CLAUDE_ALIAS'].to_s
+def ours_name?(n)
+  n = n.to_s
+  n.start_with?('B-') || (!ALIAS.empty? && n == ALIAS)
+end
+OURS = /\AB-/
 # 安全解析：只允许 YAML 原生标量与容器。
 #   permitted_classes 为空 → 禁止 !ruby/object 等任意对象反序列化；
 #   aliases: true        → 兼容订阅里常见的锚点引用（不引入反序列化面）。
@@ -182,8 +198,8 @@ exnames = []
 begin
   b = yload(base)
   # 只与机场 A 的节点比名。目标文件可能已包含上一轮注入的 B 节点
-  # （B- 前缀与 B Taiwan 01 这类别名），那些会被 merge 阶段整体剥离，不构成冲突。
-  exnames = (b['proxies'] || []).map { |p| p['name'].to_s }.reject { |n| n =~ OURS }
+  # （B- 前缀与配置中的 alias），那些会被 merge 阶段整体剥离，不构成冲突。
+  exnames = (b['proxies'] || []).map { |p| p['name'].to_s }.reject { |n| ours_name?(n) }
 rescue Exception
 end
 seen = {}
@@ -297,26 +313,38 @@ require 'yaml'
 cfg, nodesf, out, mode = ARGV
 SUFFIX = %w[claude.ai claude.com anthropic.com claude.app claudeusercontent.com claudemcpcontent.com]
 OURS_G = %w[ClaudeAuto Claude专用]
-# 本方案自己注入的节点名（见 claude_inject.sh validate 段的 OURS 注释）
-OURS = /\AB[- ]/
-# 机场 B 目标节点的显示名映射。放在构建阶段而不是直接改配置文件：
+# 本方案自己注入的节点名（见 claude_inject.sh validate 段的 ours_name? 注释）
+ALIAS = ENV['CLAUDE_ALIAS'].to_s
+NODE_MATCH_SRC = ENV['CLAUDE_NODE_MATCH'].to_s
+if ALIAS.empty? || NODE_MATCH_SRC.empty?
+  warn 'E_CONFIG missing CLAUDE_ALIAS or CLAUDE_NODE_MATCH'
+  exit 2
+end
+begin
+  NODE_MATCH = Regexp.new(NODE_MATCH_SRC)
+rescue RegexpError => e
+  warn "E_CONFIG bad node_match: #{e.message}"
+  exit 2
+end
+def ours_name?(n)
+  n = n.to_s
+  n.start_with?('B-') || n == ALIAS
+end
+OURS = /\AB-/
+# 目标节点的显示名映射。放在构建阶段而不是直接改配置文件：
 # 订阅每次重拉都会带回原名，只有在这里改名才能对「每次重建」都成立。
-# 匹配用锚定正则，且要求命中数恰好为 1；命中 0 个或 >1 个都只报告不猜。
-B_RENAME = [
-  { match: /台湾01\s*Home\z/u, to: 'B Taiwan 01', from_kind: '订阅原名' }
-].freeze
+# 匹配用配置里的 Ruby 正则，且要求命中数恰好为 1；命中 0 个或 >1 个都失败并拒绝写入。
 # S7 起 Claude 专属出口有两条硬约束：
 # · ALIAS 必须是 Claude专用 的首个成员。select 组的默认值就是首个成员，写进 YAML
-#   才能保证「cache.db 被清空 / 配置重新生成 / 换配置文件」之后默认出口仍是台湾节点。
+#   才能保证「cache.db 被清空 / 配置重新生成 / 换配置文件」之后默认出口仍是该别名。
 #   只靠运行时 API 选中值（store-selected）会被清缓存打回自动选优。
 # · CLAUDE_CIDR 兜住「连接没有域名」的路径：客户端直连真实 IP 或收不到 SNI 时，
 #   域名规则失效，连接会一路落到 rules 末尾的 MATCH 走机场 A。该网段是 Anthropic
 #   自有分配（ARIN NET-160-79-104-0-1，Anthropic, PBC，160.79.104.0-160.79.111.255）。
 #   no-resolve 让内核不为匹配该规则做反查。
-ALIAS = 'B Taiwan 01'
 CLAUDE_CIDR = 'IP-CIDR,160.79.104.0/21,Claude专用,no-resolve'
 # WebRTC 的 STUN 反射地址必须和 Claude 页面看到的出口一致：页面用 HTTP 看到的
-# 是台湾节点，而 STUN 默认落到 google.com / MATCH（机场 A 的 🚀节点选择），
+# 是专属出口节点，而 STUN 默认落到 google.com / MATCH（机场 A 的 🚀节点选择），
 # 两个出口不一致，IP 检测就会判成「真实网络已暴露」。STUN 主机分散在
 # stun*.l.google.com、stun.cloudflare.com、stun.services.mozilla.com 等，
 # 逐个枚举必漏，用 keyword 一次兜住；TURN 不在其列也不影响（TURN 不暴露本机地址）。
@@ -336,25 +364,25 @@ def yload(path)
 end
 
 def apply_rename(nodes, report)
-  renamed = {}
-  B_RENAME.each do |rule|
-    hits = nodes.each_index.select { |i| nodes[i]['name'].to_s =~ rule[:match] }
-    # 订阅里可能已带别名（缓存或上一轮产物），此时命中本身就是目标名
-    if hits.size == 1
-      src = nodes[hits[0]]['name'].to_s
-      renamed[hits[0]] = rule[:to]
-      report << "rename=#{src} -> #{rule[:to]}"
-    elsif hits.size > 1
-      report << "rename_skipped reason=ambiguous to=#{rule[:to]} matches=#{hits.size}"
-    else
-      report << "rename_missing to=#{rule[:to]} （订阅中未找到匹配节点，未改动任何名字）"
+  # 已是目标别名的节点视为已命中（幂等）
+  already = nodes.each_index.select { |i| nodes[i]['name'].to_s == ALIAS }
+  hits = nodes.each_index.select { |i| nodes[i]['name'].to_s =~ NODE_MATCH }
+  hits = (hits + already).uniq
+  if hits.size == 1
+    src = nodes[hits[0]]['name'].to_s
+    report << "rename=#{src} -> #{ALIAS}"
+    nodes.each_with_index.map do |n, i|
+      next n unless i == hits[0]
+      q = Marshal.load(Marshal.dump(n))
+      q['name'] = ALIAS
+      q
     end
-  end
-  nodes.each_with_index.map do |n, i|
-    next n unless renamed.key?(i)
-    q = Marshal.load(Marshal.dump(n))
-    q['name'] = renamed[i]
-    q
+  elsif hits.size > 1
+    warn "E_RENAME_AMBIGUOUS node_match=#{NODE_MATCH.inspect} matches=#{hits.size} alias=#{ALIAS}"
+    exit 18
+  else
+    warn "E_RENAME_MISSING node_match=#{NODE_MATCH.inspect} alias=#{ALIAS} （订阅中未找到匹配节点）"
+    exit 18
   end
 end
 
@@ -362,7 +390,7 @@ d = yload(cfg)
 d['proxies'] ||= []
 d['proxy-groups'] ||= []
 d['rules'] ||= []
-d['proxies'].reject! { |p| p.is_a?(Hash) && p['name'].to_s =~ OURS }
+d['proxies'].reject! { |p| p.is_a?(Hash) && ours_name?(p['name']) }
 d['proxy-groups'].reject! { |g| g.is_a?(Hash) && OURS_G.include?(g['name']) }
 # APNs 组/规则同样先清后加，保证重复注入不累积
 d['proxy-groups'].reject! { |g| g.is_a?(Hash) && g['name'] == APNS_G }
@@ -392,10 +420,14 @@ if mode == 'normal'
            'url' => 'http://cp.cloudflare.com/generate_204',
            'interval' => 300, 'tolerance' => 50, 'lazy' => false,
            'proxies' => usable }
-  # 首个成员即 select 组的默认出口。别名在订阅里存在时钉死台湾节点，ClaudeAuto 退居
-  # 第二位（只供人工主动切换；select 组本身不做故障接管，台湾不可用即连接失败）。
-  # 别名缺失时退回旧顺序，避免改名规则未命中导致构建失败。
-  head = usable.include?(ALIAS) ? [ALIAS, 'ClaudeAuto'] : ['ClaudeAuto']
+  # 首个成员即 select 组的默认出口。别名必须在，并钉在第一位；ClaudeAuto 退居
+  # 第二位（只供人工主动切换；select 组本身不做故障接管，别名不可用即连接失败）。
+  # 别名未命中时 apply_rename 已经失败退出，这里不再静默降级。
+  unless usable.include?(ALIAS)
+    warn "E_RENAME_MISSING alias=#{ALIAS} not in usable list"
+    exit 18
+  end
+  head = [ALIAS, 'ClaudeAuto']
   sel = { 'name' => 'Claude专用', 'type' => 'select',
           'proxies' => head + (usable - head) + ['REJECT'] }
   d['proxy-groups'].unshift(auto, sel)
@@ -426,8 +458,16 @@ RUBY
 cat > "$WORK/verify.rb" <<'RUBY'
 require 'yaml'
 base, merged, mode = ARGV
-# 机场 B 目标节点的统一显示名（与 merge 段 B_RENAME 的 to 值一致）
-ALIAS = 'B Taiwan 01'
+# 目标节点的统一显示名（与配置中的 claude.alias 一致）
+ALIAS = ENV['CLAUDE_ALIAS'].to_s
+if ALIAS.empty?
+  warn 'E_CONFIG missing CLAUDE_ALIAS'
+  exit 2
+end
+def ours_name?(n)
+  n = n.to_s
+  n.start_with?('B-') || n == ALIAS
+end
 # Anthropic 自有网段规则（与 merge 段 CLAUDE_CIDR 必须逐字一致）
 CLAUDE_CIDR = 'IP-CIDR,160.79.104.0/21,Claude专用,no-resolve'
 # WebRTC/STUN 与 Claude 同出口（与 merge 段 STUN_RULE 必须逐字一致）
@@ -450,18 +490,13 @@ if mode == 'normal'
   errs << 'no_auto' unless auto
   errs << 'reject_not_last' unless sel && sel['proxies'].is_a?(Array) && sel['proxies'].last == 'REJECT'
   errs << 'empty_auto' unless auto && auto['proxies'].is_a?(Array) && auto['proxies'].size > 0
-  # 机场 B 目标节点的统一显示名：出现就必须唯一，且必须参与 Claude 路由
-  # （台湾在 Anthropic 支持地区内，不进排除名单）。缺失只告警，不阻断构建。
+  # 配置中的 alias 必须出现且唯一，并作为 Claude专用 的首位。
   alias_nodes = (m['proxies'] || []).select { |p| p['name'].to_s == ALIAS }
-  # S7：select 组的默认出口 = 首个成员。有别名就必须是别名（钉死台湾），
-  # 无别名才退回旧的 ClaudeAuto 首位。ClaudeAuto 只允许排在第二位。
-  want_head = alias_nodes.empty? ? 'ClaudeAuto' : ALIAS
-  errs << 'pin_not_first' unless sel && sel['proxies'].is_a?(Array) && sel['proxies'][0] == want_head
+  # select 组的默认出口 = 首个成员，必须是 alias；ClaudeAuto 只允许排在第二位。
+  errs << 'alias_missing' if alias_nodes.empty?
+  errs << 'pin_not_first' unless sel && sel['proxies'].is_a?(Array) && sel['proxies'][0] == ALIAS
   errs << 'sel_dup_member' if sel && sel['proxies'].is_a?(Array) && sel['proxies'].size != sel['proxies'].uniq.size
-  if alias_nodes.empty?
-    warn "alias_missing #{ALIAS}（改名规则未命中，配置仍可用）"
-  else
-    # 别名在时 ClaudeAuto 必须紧随其后（第二位），别名的自动兜底退居次要位置
+  unless alias_nodes.empty?
     errs << 'auto_not_second' unless sel && sel['proxies'].is_a?(Array) && sel['proxies'][1] == 'ClaudeAuto'
     errs << 'alias_dup' if alias_nodes.size > 1
     errs << 'alias_not_in_auto' unless auto && auto['proxies'].is_a?(Array) && auto['proxies'].include?(ALIAS)
@@ -506,7 +541,7 @@ b2 = Marshal.load(Marshal.dump(b))
 # 双侧剥离我们的条目后再比对：输入本身可能已经是注入过的配置
 SUF = %w[claude.ai claude.com anthropic.com claude.app claudeusercontent.com claudemcpcontent.com]
 def strip_ours!(x)
-  x['proxies'].reject! { |p| p.is_a?(Hash) && p['name'].to_s =~ /\AB[- ]/ } if x['proxies'].is_a?(Array)
+  x['proxies'].reject! { |p| p.is_a?(Hash) && ours_name?(p['name']) } if x['proxies'].is_a?(Array)
   if x['proxy-groups'].is_a?(Array)
     x['proxy-groups'].reject! { |g| g.is_a?(Hash) && (%w[ClaudeAuto Claude专用] + [APNS_G]).include?(g['name']) }
   end
@@ -539,10 +574,19 @@ BUILD_MODE=normal
 [ "$HAVE_NODES" -eq 1 ] || BUILD_MODE=reject
 say "--- build mode=$BUILD_MODE"
 
-$RUBY "$WORK/merge.rb" "$WORK/base.yaml" "$WORK/valid_nodes.yaml" "$WORK/merged.yaml" "$BUILD_MODE" 2>"$WORK/merge.err" \
-  || { say "ERROR merge failed: $(head -n 1 "$WORK/merge.err" 2>/dev/null | cut -c1-200)"; BUILD_MODE=reject
-       $RUBY "$WORK/merge.rb" "$WORK/base.yaml" /dev/null "$WORK/merged.yaml" reject 2>>"$WORK/merge.err" \
-         || { say "ERROR merge(reject) failed, target untouched"; exit 14; } }
+$RUBY "$WORK/merge.rb" "$WORK/base.yaml" "$WORK/valid_nodes.yaml" "$WORK/merged.yaml" "$BUILD_MODE" 2>"$WORK/merge.err"
+MRC=$?
+if [ "$MRC" -eq 18 ]; then
+  say "ERROR 节点匹配失败（claude.node_match 未恰好命中一个节点），目标文件未修改"
+  say "detail: $(tr '\n' ' ' < "$WORK/merge.err" 2>/dev/null | cut -c1-300)"
+  exit 18
+fi
+if [ "$MRC" -ne 0 ]; then
+  say "ERROR merge failed: $(head -n 1 "$WORK/merge.err" 2>/dev/null | cut -c1-200)"
+  BUILD_MODE=reject
+  $RUBY "$WORK/merge.rb" "$WORK/base.yaml" /dev/null "$WORK/merged.yaml" reject 2>>"$WORK/merge.err" \
+    || { say "ERROR merge(reject) failed, target untouched"; exit 14; }
+fi
 
 CHECK=$($RUBY "$WORK/verify.rb" "$WORK/base.yaml" "$WORK/merged.yaml" "$BUILD_MODE" 2>"$WORK/verify.err")
 VR=$?
@@ -615,8 +659,9 @@ case "$VRC" in
 esac
 
 if [ "$MODE" = "dryrun" ] || [ "$MODE" = "check" ]; then
-  cp "$WORK/merged.yaml" /tmp/claude_inject_dryrun.yaml 2>/dev/null
-  say "dry-run: 输出 /tmp/claude_inject_dryrun.yaml（目标未改动）"
+  DRYOUT="${CLAUDE_DRYRUN_OUT:-/tmp/claude_inject_dryrun.yaml}"
+  cp "$WORK/merged.yaml" "$DRYOUT" 2>/dev/null
+  say "dry-run: 输出 $DRYOUT（目标未改动）"
   exit 0
 fi
 

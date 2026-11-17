@@ -8,9 +8,10 @@
 #
 # 回滚对象（严格按此顺序，前一步失败即中止，不做后续破坏性清理）:
 #   1. /etc/openclash/custom/openclash_custom_overwrite.sh  ← 从备份恢复并校验 MD5
-#   2. /etc/openclash/custom/claude_b.yaml                  ← 删除（订阅凭据）
-#   3. /etc/openclash/custom/claude_cache/                  ← 删除（节点缓存）
-#   4. /etc/openclash/custom/.claude_backup/                ← 保留最近，其余清理
+#   2. $CLAUDE_RUN_CONFIG（若已提供真实路径）              ← 剥离注入的组、规则和节点
+#   3. /etc/openclash/custom/claude_b.yaml                  ← 删除（订阅凭据）
+#   4. /etc/openclash/custom/claude_cache/                  ← 删除（节点缓存）
+#   5. /etc/openclash/custom/.claude_backup/                ← 保留最近，其余清理
 #
 # 安全约束:
 #   · 钩子未成功恢复到原厂 MD5 时，立即退出（exit 3），凭据/缓存/备份一律保留
@@ -24,7 +25,10 @@ set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-VERSION="1.0"
+VERSION="1.1"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=load_config.sh
+[ -r "$SCRIPT_DIR/load_config.sh" ] && . "$SCRIPT_DIR/load_config.sh"
 CFG_DIR="${CLAUDE_CFG_DIR:-/etc/openclash/custom}"
 HOOK="$CFG_DIR/openclash_custom_overwrite.sh"
 HOOK_BAK="$CFG_DIR/.claude_backup/openclash_custom_overwrite.sh.orig"
@@ -32,7 +36,7 @@ CRED="$CFG_DIR/claude_b.yaml"
 CACHE="$CFG_DIR/claude_cache"
 BAKDIR="$CFG_DIR/.claude_backup"
 RUNCFG="${CLAUDE_RUN_CONFIG:-/etc/openclash/__PRIVATE_CONFIG__.yaml}"
-STOCK_MD5="c6fb4a96c1e14ee24ba85682e2e3d367"
+STOCK_MD5="${CLAUDE_STOCK_MD5:-c6fb4a96c1e14ee24ba85682e2e3d367}"
 
 MODE=check
 case "${1:-}" in
@@ -70,8 +74,16 @@ if [ "$HAS_HOOK_MOD" -eq 1 ]; then
 else
   echo "   1. 钩子未改动，跳过"
 fi
-[ -f "$CRED" ] && echo "   2. 删除凭据 $CRED" || echo "   2. 凭据不存在，跳过"
-[ -d "$CACHE" ] && echo "   3. 删除缓存目录 $CACHE" || echo "   3. 缓存不存在，跳过"
+if [ -n "${RUNCFG:-}" ] && [ -f "$RUNCFG" ]; then
+  case "$RUNCFG" in
+    *__PRIVATE_CONFIG__*) echo "   2. 跳过配置剥离：路径仍是占位符" ;;
+    *) echo "   2. 从运行配置剥离 Claude 相关组、规则和注入节点：$RUNCFG" ;;
+  esac
+else
+  echo "   2. 未提供可写的运行配置（CLAUDE_RUN_CONFIG），跳过文件内剥离"
+fi
+[ -f "$CRED" ] && echo "   3. 删除凭据 $CRED" || echo "   3. 凭据不存在，跳过"
+[ -d "$CACHE" ] && echo "   4. 删除缓存目录 $CACHE" || echo "   4. 缓存不存在，跳过"
 
 if [ "$MODE" = "check" ]; then
   echo ""
@@ -126,7 +138,57 @@ if [ "$HOOK_OK" -ne 1 ]; then
   exit 3
 fi
 
-# ---------------------------------------------------------------- 2. 凭据
+# ---------------------------------------------------------------- 2. 从运行配置里剥离本方案注入的组、规则和节点
+# 不依赖 OpenClash 重启。路径必须来自这次的 CLAUDE_RUN_CONFIG / 实机配置，不是仓库占位符。
+if [ -n "${RUNCFG:-}" ] && [ -f "$RUNCFG" ]; then
+  case "$RUNCFG" in
+    *__PRIVATE_CONFIG__*) echo "   跳过配置剥离：路径仍是占位符 $RUNCFG" ;;
+    *)
+      toolkit_load_config >/dev/null 2>&1 || true
+      _ruby="${CLAUDE_RUBY:-ruby}"
+      if "$_ruby" -ryaml -E UTF-8 -e '
+path = ARGV[0]
+alias_name = ENV["CLAUDE_ALIAS"].to_s
+suffix = %w[claude.ai claude.com anthropic.com claude.app claudeusercontent.com claudemcpcontent.com]
+apns_g = "APNs推送"
+apns_rule = "DOMAIN-SUFFIX,push.apple.com,#{apns_g}"
+cidr = "IP-CIDR,160.79.104.0/21,Claude专用,no-resolve"
+def yload(p)
+  Psych.safe_load(File.read(p), permitted_classes: [], permitted_symbols: [], aliases: true)
+end
+d = yload(path)
+unless d.is_a?(Hash)
+  warn "E_NOT_HASH"
+  exit 1
+end
+ours = ->(n) { n.to_s.start_with?("B-") || (!alias_name.empty? && n.to_s == alias_name) }
+d["proxies"].reject! { |p| p.is_a?(Hash) && ours.call(p["name"]) } if d["proxies"].is_a?(Array)
+if d["proxy-groups"].is_a?(Array)
+  d["proxy-groups"].reject! { |g| g.is_a?(Hash) && (%w[ClaudeAuto Claude专用] + [apns_g]).include?(g["name"]) }
+end
+if d["rules"].is_a?(Array)
+  d["rules"].reject! { |r| r.is_a?(String) && (r.end_with?(",Claude专用") || r.strip == apns_rule || r.strip == cidr) }
+  d["rules"].reject! { |r| r.is_a?(String) && r.end_with?(",REJECT") && suffix.any? { |s| r == "DOMAIN-SUFFIX,#{s},REJECT" } }
+end
+tmp = "#{path}.rollback.#{$$}"
+mode = (File.stat(path).mode & 0o777)
+File.open(tmp, "w") { |f| YAML.dump(d, f) }
+File.chmod(mode, tmp)
+File.rename(tmp, path)
+puts "stripped"
+' "$RUNCFG"; then
+        echo "   已从配置剥离 Claude 相关组、规则和注入节点：$RUNCFG"
+      else
+        echo "   [ERROR] 从配置剥离失败，凭据与缓存将保留，便于排查。"
+        exit 3
+      fi
+      ;;
+  esac
+else
+  echo "   未提供可写的运行配置（CLAUDE_RUN_CONFIG），跳过文件内剥离"
+fi
+
+# ---------------------------------------------------------------- 3. 凭据
 [ -f "$CRED" ] && rm -f "$CRED" && echo "   凭据已删除"
 [ -d "$CACHE" ] && rm -rf "$CACHE" && echo "   缓存已删除"
 
@@ -139,12 +201,11 @@ fi
 
 echo ""
 echo "-- 剩余动作（需人工，在维护窗口执行）"
-echo "   配置文件中若仍含 Claude专用 引用，需重新生成："
-echo "     touch $HOOK"
+echo "   若内核仍在运行旧配置，需要一次重启才能让剥离后的文件生效："
 echo "     /etc/init.d/openclash restart        # 会短暂中断代理"
 echo "   本脚本不执行重启。"
 echo ""
 echo "-- 回滚后自检命令"
 echo "     md5sum $HOOK                       # 期望 $STOCK_MD5"
-echo "     grep -c 'Claude专用' $RUNCFG        # 期望 0（重新生成之后）"
+echo "     grep -c 'Claude专用' $RUNCFG        # 期望 0（已剥离之后）"
 exit 0

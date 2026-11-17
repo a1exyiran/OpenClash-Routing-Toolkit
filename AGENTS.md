@@ -2,7 +2,7 @@
 
 给所有编码助手。长流程在 [`SKILL.md`](SKILL.md) 和 [`docs/workflow.md`](docs/workflow.md)，不要把那两份抄进这里。
 
-本仓库提供已跑通的方法和 [`scripts/`](scripts/) 里的工作脚本，**不是已完成的一键安装器**。没有用户自己的配置、没有这一次的明确确认，就停在只读检查。
+本仓库提供已跑通的方法和 [`scripts/`](scripts/) 里的工作脚本，**不是已完成的一键安装器**。注入前必须有用户自己的 `config.yaml`（`claude.node_match` 与 `claude.alias`）。没有用户自己的配置、没有这一次的明确确认，就停在只读检查。
 
 ## 硬性规则
 
@@ -12,7 +12,7 @@
 - 重启 / 重载 OpenClash，或重启路由器
 - 刷新订阅，或读取、复制、打印订阅 URL、密码、UUID、证书、API secret
 - 把 `__PRIVATE_CONFIG__`、`__IP_ADDRESS__` 等占位符当成真实值去连机器
-- 未经预览和确认，把 `scripts/` 里的脚本直接拿到生产执行，或把脚本里的组名、规则、占位路径当成用户环境的默认值
+- 未经预览和确认，把 `scripts/` 里的脚本直接拿到生产执行，或把 `config.example.yaml` 里的示例节点名、组名、占位路径当成用户环境的默认值
 - 改动用户未点名的路由、DNS、防火墙、DHCP 或其他策略组
 - 代开 GitHub issue / PR、代推、代打 tag（除非用户要求并看过正文）
 - 用猜测补全仓库没给出的型号、OpenClash 版本、兼容性或性能数字
@@ -24,7 +24,7 @@
 ## 工作流（预览优先）
 
 1. 只读检查环境（见下方命令）。缺项标「未确认」。
-2. 向用户要配置文件（参考 `config.example.yaml`）和凭据放置方式。没有配置就不要进入写入计划。
+2. 向用户要配置文件（复制 `config.example.yaml` 为 `config.yaml`，必须填写 `claude.node_match` 与 `claude.alias`）和凭据放置方式。没有这两项就不要进入写入计划，注入脚本也会拒绝执行。
 3. 给出预览：将改哪些文件、会不会重启、成功标准、回滚命令。
 4. **等确认。**
 5. 按 [`SKILL.md`](SKILL.md) 一步一校验地执行；任一步失败则停止。
@@ -37,7 +37,10 @@
 ./install.sh --check
 
 # 语法检查（工作脚本在 scripts/，不是一键安装入口）
-# bash -n scripts/claude_inject.sh
+# bash -n scripts/claude_inject.sh scripts/claude_update.sh scripts/claude_rollback.sh scripts/openclash_custom_overwrite.sh scripts/load_config.sh
+
+# 预览注入（不写生效配置；需要用户的 config.yaml 与当前配置副本）
+# CLAUDE_CONFIG=./config.yaml ./scripts/claude_inject.sh --dry-run /path/to/current.yaml
 
 # 预览构建、正式安装：待实现
 ./install.sh --dry-run --config /path/to/config.yaml   # 目前会拒绝并说明
@@ -55,6 +58,6 @@
 | [`README.md`](README.md) | 项目是什么、怎么开始、场景、限制 |
 | [`SKILL.md`](SKILL.md) | 安装 / 排查的逐步流程和示例口令 |
 | [`docs/workflow.md`](docs/workflow.md) | 环境探测表、备份与验证细节 |
-| [`config.example.yaml`](config.example.yaml) | 用户配置清单（解析落地仍为待实现） |
+| [`config.example.yaml`](config.example.yaml) | 用户配置模板；`claude.node_match` / `claude.alias` 会被注入脚本读取 |
 | [`scripts/`](scripts/) | 注入、更新、回滚、覆写钩子的工作脚本 |
 | [`CLAUDE.md`](CLAUDE.md) | 仅指向本文件 |

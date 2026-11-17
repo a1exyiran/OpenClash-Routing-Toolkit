@@ -1,7 +1,21 @@
 #!/bin/sh
-. /usr/share/openclash/ruby.sh
-. /usr/share/openclash/log.sh
-. /lib/functions.sh
+# OpenClash 原厂辅助函数：在路由器上存在时再加载；本地预览或测试时可缺省。
+if [ -f /usr/share/openclash/ruby.sh ]; then
+    # shellcheck disable=SC1091
+    . /usr/share/openclash/ruby.sh
+fi
+if [ -f /usr/share/openclash/log.sh ]; then
+    # shellcheck disable=SC1091
+    . /usr/share/openclash/log.sh
+fi
+if [ -f /lib/functions.sh ]; then
+    # shellcheck disable=SC1091
+    . /lib/functions.sh
+fi
+# 本地没有 OpenClash 日志库时给一个不会报错的回退
+if ! type LOG_OUT >/dev/null 2>&1; then
+    LOG_OUT() { echo "$*"; }
+fi
 
 # This script is called by /etc/init.d/openclash
 # Add your custom overwrite scripts here, they will be take effict after the OpenClash own srcipts
@@ -152,11 +166,21 @@ CLAUDE_INJECT="$CLAUDE_HOME/claude_inject.sh"
 CLAUDE_HOOK_LOG="$CLAUDE_HOME/claude_hook.log"
 CLAUDE_FAIL_MARK="$CLAUDE_HOME/claude_hook.FAILED"
 CLAUDE_OC_LOG="${CLAUDE_HOOK_OCLOG:-$LOG_FILE}"
-CLAUDE_LOCK="/tmp/.claude_hook.lock"
+CLAUDE_LOCK="${CLAUDE_HOOK_LOCK:-/tmp/.claude_hook.lock}"
 CLAUDE_TIMEOUT="${CLAUDE_HOOK_TIMEOUT:-180}"
 CLAUDE_LOCK_WAIT="${CLAUDE_HOOK_LOCK_WAIT:-15}"
 CLAUDE_RUBY_BIN="${CLAUDE_RUBY:-ruby}"
 export CLAUDE_CFG_DIR="$CLAUDE_HOME"
+# 若同目录有 load_config.sh，尽量带上 alias，便于剥离与注入
+if [ -r "$CLAUDE_HOME/load_config.sh" ]; then
+    # shellcheck source=load_config.sh
+    . "$CLAUDE_HOME/load_config.sh"
+    toolkit_load_config >/dev/null 2>&1 || true
+elif [ -r "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/load_config.sh" ]; then
+    # shellcheck source=load_config.sh
+    . "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/load_config.sh"
+    toolkit_load_config >/dev/null 2>&1 || true
+fi
 
 claude_log() {
     _t=$(date '+%Y-%m-%d %H:%M:%S')
@@ -253,7 +277,8 @@ unless mem.last.to_s == 'REJECT'
   puts "E_NO_REJECT_TAIL last=#{mem.last.inspect}"
   exit 1
 end
-bnodes = (d['proxies'] || []).count { |p| p.is_a?(Hash) && p['name'].to_s =~ /\AB[- ]/ }
+alias_name = ENV['CLAUDE_ALIAS'].to_s
+bnodes = (d['proxies'] || []).count { |p| p.is_a?(Hash) && (p['name'].to_s.start_with?('B-') || (!alias_name.empty? && p['name'].to_s == alias_name)) }
 mode = (mem.size == 1 && mem.first.to_s == 'REJECT') ? 'reject-only' : 'normal'
 puts "verify=OK mode=#{mode} bnodes=#{bnodes} members=#{mem.size} tail=#{mem.last}"
 RUBY
@@ -309,8 +334,9 @@ d['proxies'] ||= []
 d['proxy-groups'] ||= []
 d['rules'] ||= []
 # 剥离本方案自己注入过的内容，保证幂等（含 L3 留下的 → REJECT 规则）
-# 名字识别同时覆盖 B- 前缀与 B Taiwan 01 这类不带连字符的别名
-d['proxies'].reject! { |p| p.is_a?(Hash) && p['name'].to_s =~ /\AB[- ]/ }
+# 名字识别同时覆盖 B- 前缀与配置中的 claude.alias
+ALIAS = ENV['CLAUDE_ALIAS'].to_s
+d['proxies'].reject! { |p| p.is_a?(Hash) && (p['name'].to_s.start_with?('B-') || (!ALIAS.empty? && p['name'].to_s == ALIAS)) }
 d['proxy-groups'].reject! { |g| g.is_a?(Hash) && %w[ClaudeAuto Claude专用].include?(g['name']) }
 d['rules'].reject! { |r| r.is_a?(String) && r.end_with?(',Claude专用') }
 d['rules'].reject! do |r|
