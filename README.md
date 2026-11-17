@@ -10,13 +10,13 @@
 > [!IMPORTANT]
 > 只适用于你自己管理、并且已经在用 OpenClash 和 Mihomo 的机器。先预览，你确认后再写入。仓库里的示例只有占位符，请不要提交或截图真实订阅、证书、节点套餐、IP 或家用路径。`curl | bash` 不是默认安装方式，也不保证兼容所有版本。
 
-现在能公开的是已经跑通过的方法和脚本（见 [`scripts/`](scripts/)）。注入脚本会读取 `config.yaml` 里的 `claude.node_match` 与 `claude.alias`。通用安装器还在做。
+现在能公开的是已经跑通过的方法和脚本（见 [`scripts/`](scripts/)）。注入脚本会读取 `config.yaml` 里的 `claude.node_match` 与 `claude.alias`。安装器 `install.sh` 分三步：`--check` 只读探测，`--dry-run` 预览会改什么，`--apply` 你确认后才写入，从不自动重启。
 
 ## 它做什么
 
 启动时钩子只做离线注入，订阅更新放在内核还在跑的时候。校验通过再原子替换，回滚默认先检查。实际场景是：Claude / Anthropic 自有流量走你指定的纯净 IP 出口，其余流量保持原策略。请用你自己的订阅，并在配置里填写要钉死的节点匹配规则和别名，不要照搬示例值。
 
-这不是图形面板，也还不是可以对任意路由器一键执行的发行版。
+这不是图形面板，也不保证对任意路由器都能一次跑通；每台机器都要先 `--dry-run` 看结果。
 
 ## 演示
 
@@ -48,13 +48,16 @@ CLASH_T=PASS
 请先阅读这个仓库 main 分支的 AGENTS.md 和 SKILL.md（https://raw.githubusercontent.com/a1exyiran/OpenClash-Routing-Toolkit/main/AGENTS.md 与 https://raw.githubusercontent.com/a1exyiran/OpenClash-Routing-Toolkit/main/SKILL.md），检查我的 OpenWrt/OpenClash 环境，只预览将要改动的文件，未经我确认不要写入或重启服务。仓库：https://github.com/a1exyiran/OpenClash-Routing-Toolkit
 ```
 
-这句话现在就可以用来约束助手。通用安装器（`install.sh --dry-run` / `--apply`）仍为 **即将提供 / 待实现**，不要把它理解成已经能一键改路由器。只读探测可以用：
+自己动手的话，在路由器上克隆仓库后按这个顺序来（详见下面「安装」）：
 
 ```sh
-./install.sh --check
+./install.sh --check   --config ./config.yaml   # 只读探测
+./install.sh --dry-run --config ./config.yaml   # 列出会改的文件，临时目录渲染 + clash -t，不写入
+./install.sh --apply   --config ./config.yaml   # 再预览一遍，输入 yes 才写入；不重启
+/etc/init.d/openclash restart                   # 你自己在维护窗口执行
 ```
 
-`install.sh --dry-run` 和 `--apply` 尚未实现，脚本会拒绝执行。不要改用 `curl | bash`。工作脚本在 [`scripts/`](scripts/)，按下面的手动安装步骤预览后再用，不要把它们当成一键安装器。
+不要改用 `curl | bash`。
 
 ## 典型场景
 
@@ -67,30 +70,48 @@ CLASH_T=PASS
 | 注入或订阅暂时失败 | 按设计降级，而不是 silently 落到直连或别的组（本地沙盒见过空组出现 `COMPATIBLE`；完整失败关闭仍有已知残项，见限制） |
 | 决定撤掉这次改动 | 先跑回滚检查，确认原厂钩子备份校验通过，再执行恢复；不自动重启 |
 
-## 手动安装
+## 安装
 
-在 Agent 安装器落地之前，这是正经路径。详细步骤见 [`docs/workflow.md`](docs/workflow.md)。
+1. 确认环境：OpenWrt / ImmortalWrt，已安装 OpenClash 与 Mihomo、Ruby；看可用内存（历史机器只有 485 MB、无 swap，内存紧张时 `--dry-run` 会跳过 `clash -t`，门槛是 `deploy.min_mem_available_mb`）。
+2. 复制 [`config.example.yaml`](config.example.yaml) 为 `config.yaml`，填写 `claude.node_match`（Ruby 正则，必须恰好命中一个订阅节点）和 `claude.alias`（改名后的显示名，会成为 `Claude专用` 组的首位）。示例值 `美国01` / `Claude-Node` 只是占位，必须改成你自己的。`openclash.config_path` 留空时从 `uci` 读取，也可以用 `--target FILE` 指定。订阅地址不写进这个文件。
+3. 订阅凭据由你自己放到 `/etc/openclash/custom/claude_b.yaml`（内容 `url: ...`，`chmod 600`）。安装器只检查它在不在、权限是什么，不读内容。
+4. 只读探测：`./install.sh --check --config ./config.yaml`。
+5. 预览：`./install.sh --dry-run --config ./config.yaml`。它会列出：
+   - 要安装 / 替换的文件：`/etc/openclash/custom/` 下的 `claude_inject.sh`、`claude_update.sh`、`claude_rollback.sh`、`load_config.sh`、`config.yaml`（600）；
+   - 覆写钩子 `openclash_custom_overwrite.sh` 的改法：保留你现在的钩子内容，去掉结尾的 `exit 0`，追加 Claude 注入段，并给出新旧 sha256；
+   - apply 会做的备份、缓存路径（`claude_cache/`）和凭据状态；
+   - 在 `/tmp` 临时目录里用当前生效配置渲染一份注入结果（默认只读缓存，和开机钩子一样；加 `--fetch` 则经本机代理拉一次订阅），内核存在且内存够时跑 `clash -t`。
 
-1. 确认环境：OpenWrt / ImmortalWrt，已安装 OpenClash 与 Mihomo，知道生效配置路径；看可用内存（历史机器只有 485 MB、无 swap，内存紧张时不要强行全量 `clash -t`）。
-2. 复制 [`config.example.yaml`](config.example.yaml) 为 `config.yaml`，填写 `claude.node_match`（Ruby 正则，必须恰好命中一个订阅节点）和 `claude.alias`（改名后的显示名，会成为 `Claude专用` 组的首位）。示例值 `美国01` / `Claude-Node` 只是占位，必须改成你自己的。通过 `CLAUDE_CONFIG` 或放到 `$CLAUDE_CFG_DIR/config.yaml` 提供该文件。订阅放在路由器上权限收紧的单独文件里，不要写进 Git。
-3. 备份：当前钩子、生效配置、`/etc/openclash/custom/` 里将被替换的文件；记下哈希。
-4. 在临时目录预览构建，确认产物结构，必要时再做 `clash -t`。例如：`CLAUDE_CONFIG=./config.yaml ./scripts/claude_inject.sh --dry-run /path/to/current.yaml`。`Claude专用` 是项目的功能组名，节点名则来自你的配置。
-5. 你确认预览无误后，再把经过核验的脚本和 `config.yaml` 放到自定义目录，按你的维护窗口决定是否重启。
-6. 按上一节的表格做验证。
+   dry-run 不写 OpenClash 目录下的任何文件，临时目录结束即删。
+6. 写入：`./install.sh --apply --config ./config.yaml`。它先把预览再跑一遍，预览不通过就拒绝；通过后要你输入 `yes`（非交互环境必须显式加 `--yes`）。然后：
+   - 备份当前钩子、生效配置、将被替换的文件到 `/etc/openclash/custom/.claude_backup/install_<时间戳>/`，`SHA256SUMS` 可以用 `sha256sum -c` 核对；
+   - 原始钩子另存为 `.claude_backup/openclash_custom_overwrite.sh.orig`，并记下 md5 / sha256；
+   - 安装脚本、接上钩子、写清单 `.claude_backup/install.manifest`；
+   - 校验：`sh -n`、哈希、用已安装的脚本对临时副本试跑一次注入。
+
+   不重启 OpenClash，也不改生效配置本身；钩子在下一次 OpenClash 启动时才生效。重复执行 `--apply` 时，如果文件都已是目标版本，什么都不写。
+7. 没有节点缓存时（dry-run 会提示 `build=reject`），先在内核运行时拉一次：`sh /etc/openclash/custom/claude_update.sh <运行时配置>`。
+8. 在你的维护窗口手动重启：`/etc/init.d/openclash restart`。
+9. 按上一节的表格和下面的「验证」核对。出问题按「回滚」处理。
+
+不想用安装器，也可以按 [`docs/workflow.md`](docs/workflow.md) 手动做同样的事：备份 → 预览（`CLAUDE_CONFIG=./config.yaml ./scripts/claude_inject.sh --dry-run /path/to/current.yaml`）→ 放文件 → 重启。
 
 ## 验证
 
 可复制的检查方向（路径按你的实机调整，不要使用仓库里的 `__PRIVATE_CONFIG__` 占位符去连机器）：
 
 ```sh
-# 只读探测（可在路由器上运行本仓库的提纲脚本）
-./install.sh --check
+# 只读探测
+./install.sh --check --config ./config.yaml
 
-# 内核校验示例（对预览产物，不是对未备份的生产文件）
-# clash -t -d /etc/openclash -f /tmp/preview.yaml
+# 预览 + 临时目录里的 clash -t（不写入）
+./install.sh --dry-run --config ./config.yaml
 
-# 启动后看钩子日志里是否离线命中缓存、校验是否通过
-# logread | grep -E 'fetch=skipped|verify='
+# 重启后看钩子日志：期望 fetch=skipped(offline)、verify=OK、done level=L1
+tail -n 20 /etc/openclash/custom/claude_hook.log
+
+# 运行时配置里应该有 Claude专用 组和规则
+grep -c 'Claude专用' /etc/openclash/<你的配置名>.yaml
 ```
 
 成功标准见「典型场景」。`bash -n` 通过或离线测试通过，都不等于生产验收通过。
@@ -104,7 +125,15 @@ CLASH_T=PASS
 - 不自动重启；需要重启时单独确认；
 - 恢复后确认自定义注入已撤、非目标策略还在、服务仍可用。
 
-回滚检查可用 [`scripts/claude_rollback.sh`](scripts/claude_rollback.sh)，默认只检查、不修改。路径和哈希以你这次的备份为准，不要使用仓库里的占位路径。
+用 `--apply` 装过的话，直接跑已安装的那份：
+
+```sh
+sh /etc/openclash/custom/claude_rollback.sh           # 只检查，列出会做什么
+sh /etc/openclash/custom/claude_rollback.sh --apply   # 执行
+/etc/init.d/openclash restart                         # 你自己决定什么时候重启
+```
+
+[`scripts/claude_rollback.sh`](scripts/claude_rollback.sh) 会读 `.claude_backup/install.manifest`：用里面记下的原始钩子 md5 / sha256 核对 `.orig` 备份后恢复钩子，从运行时配置里剥掉注入的组、规则和节点，删掉凭据和缓存，再删掉安装器装上去、且之后没被改过的脚本。钩子恢复失败就停，后面的都不动。安装前的完整备份留在 `.claude_backup/install_<时间戳>/`。没有清单时（手动安装），需要用 `CLAUDE_STOCK_MD5`、`CLAUDE_RUN_CONFIG` 指定这次备份的哈希和路径，不要使用仓库里的占位路径。
 
 ## 原理简述
 
@@ -132,11 +161,13 @@ OpenClash 的自定义覆盖钩子发生在内核启动之前。钩子跑起来�
 - 未承诺兼容所有 OpenWrt / OpenClash / Mihomo 版本。历史环境：ImmortalWrt SNAPSHOT r32912，Linux 6.6.69，aarch64，Mihomo `alpha-g86257fc`。路由器型号和 OpenClash 版本在资料里未能确认。
 - 启动脚本不检查钩子返回码（残项 R-04），不能宣称完整失败关闭。
 - 部分后期变更缺少独立运行日志。
-- `./install.sh --dry-run` / `--apply` 尚未实现。
+- 安装器目前只在离线沙盒里测过（伪造的 `/etc/openclash` 目录、真实 Mihomo `-t`、BusyBox ash），还没有在真实路由器上跑过完整的 `--apply` → 重启。第一次用请留好带外管理。
+- 生效配置里需要有一个名字以「自动选择」结尾的 url-test 组，`APNs推送` 组会把它当上游；没有的话注入的结构校验通不过，`--dry-run` 会报预览未通过。
+- 回滚会删除 `claude_b.yaml` 凭据和节点缓存；需要保留的话先自己备份。
 
 ## 开发与测试
 
-给 Agent 的短规则在 [`AGENTS.md`](AGENTS.md)（Claude Code 可先读 [`CLAUDE.md`](CLAUDE.md)，它只指向前者）。测试与部署长流程在 [`SKILL.md`](SKILL.md) 和 [`docs/workflow.md`](docs/workflow.md)。本地测试的失败日志请自行保留，不要编造仓库里没有的测试结果。
+给 Agent 的短规则在 [`AGENTS.md`](AGENTS.md)（Claude Code 可先读 [`CLAUDE.md`](CLAUDE.md)，它只指向前者）。离线沙盒测试：`sh tests/sandbox_test.sh`（可加 `MIHOMO_BIN=/path/to/mihomo` 用真实内核校验，`RUN_SH="busybox ash"` 用 ash 跑）。测试与部署长流程在 [`SKILL.md`](SKILL.md) 和 [`docs/workflow.md`](docs/workflow.md)。本地测试的失败日志请自行保留，不要编造仓库里没有的测试结果。
 
 ## 许可证与致谢
 

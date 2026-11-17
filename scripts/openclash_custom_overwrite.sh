@@ -142,7 +142,7 @@ CONFIG_FILE="$1"
 # 说明：
 #   本段追加在原厂模板之后，原厂内容（上方全部注释）未作任何改动。
 #   原厂文件 MD5: c6fb4a96c1e14ee24ba85682e2e3d367
-#   备份文件   : /etc/openclash/custom/openclash_custom_overwrite.sh.orig
+#   备份文件   : /etc/openclash/custom/.claude_backup/openclash_custom_overwrite.sh.orig（install.sh --apply 生成）
 #
 # 执行时机：
 #   /etc/init.d/openclash 第 3685 行，位于 start_run_core 之前。

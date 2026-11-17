@@ -12,6 +12,10 @@
 #   3. /etc/openclash/custom/claude_b.yaml                  ← 删除（订阅凭据）
 #   4. /etc/openclash/custom/claude_cache/                  ← 删除（节点缓存）
 #   5. /etc/openclash/custom/.claude_backup/                ← 保留最近，其余清理
+#   6. install.sh 安装的脚本与 config.yaml                   ← 按 .claude_backup/install.manifest 删除（哈希一致才删）
+#
+# 若存在 install.sh 写下的 .claude_backup/install.manifest，原厂 MD5 与运行配置路径默认取自清单，
+# 并额外核对原始钩子备份的 sha256。环境变量 CLAUDE_STOCK_MD5 / CLAUDE_RUN_CONFIG 仍可覆盖。
 #
 # 安全约束:
 #   · 钩子未成功恢复到原厂 MD5 时，立即退出（exit 3），凭据/缓存/备份一律保留
@@ -25,7 +29,7 @@ set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-VERSION="1.1"
+VERSION="1.2"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=load_config.sh
 [ -r "$SCRIPT_DIR/load_config.sh" ] && . "$SCRIPT_DIR/load_config.sh"
@@ -37,6 +41,19 @@ CACHE="$CFG_DIR/claude_cache"
 BAKDIR="$CFG_DIR/.claude_backup"
 RUNCFG="${CLAUDE_RUN_CONFIG:-/etc/openclash/__PRIVATE_CONFIG__.yaml}"
 STOCK_MD5="${CLAUDE_STOCK_MD5:-c6fb4a96c1e14ee24ba85682e2e3d367}"
+# install.sh --apply 写下的清单：原始钩子哈希、运行配置路径、安装过的文件
+MANIFEST="$BAKDIR/install.manifest"
+mf_get() { [ -r "$MANIFEST" ] && sed -n "s/^$1=//p" "$MANIFEST" | head -n 1; }
+ORIG_SHA=""
+if [ -r "$MANIFEST" ]; then
+  _m=$(mf_get hook_orig_md5)
+  [ -z "${CLAUDE_STOCK_MD5:-}" ] && [ -n "$_m" ] && STOCK_MD5="$_m"
+  _r=$(mf_get runtime_config)
+  [ -z "${CLAUDE_RUN_CONFIG:-}" ] && [ -n "$_r" ] && RUNCFG="$_r"
+  ORIG_SHA=$(mf_get hook_orig_sha256)
+elif [ -z "${CLAUDE_STOCK_MD5:-}" ] && [ -r "$HOOK_BAK.md5" ]; then
+  STOCK_MD5=$(cat "$HOOK_BAK.md5")
+fi
 
 MODE=check
 case "${1:-}" in
@@ -56,6 +73,7 @@ echo "   hook_bak : $([ -f "$HOOK_BAK" ] && echo "$HOOK_BAK ($(md5of "$HOOK_BAK"
 echo "   cred     : $([ -f "$CRED" ] && echo 存在 || echo 无)"
 echo "   cache    : $([ -d "$CACHE" ] && echo "存在 ($(ls -1 "$CACHE" 2>/dev/null | wc -l | tr -d ' ') 个文件)" || echo 无)"
 echo "   runtime  : $RUNCFG"
+echo "   manifest : $([ -r "$MANIFEST" ] && echo "$MANIFEST" || echo 无)"
 if [ -f "$RUNCFG" ]; then
   N=$(grep -c 'Claude专用' "$RUNCFG" 2>/dev/null || echo 0)
   echo "   配置内 Claude 引用数: $N"
@@ -84,6 +102,12 @@ else
 fi
 [ -f "$CRED" ] && echo "   3. 删除凭据 $CRED" || echo "   3. 凭据不存在，跳过"
 [ -d "$CACHE" ] && echo "   4. 删除缓存目录 $CACHE" || echo "   4. 缓存不存在，跳过"
+if [ -r "$MANIFEST" ]; then
+  echo "   5. 移除 install.sh 安装的文件（哈希与清单一致的才删，改过的保留）："
+  grep '^installed ' "$MANIFEST" | while read -r _k _s _p; do echo "      $_p"; done
+else
+  echo "   5. 没有 install.sh 清单，跳过"
+fi
 
 if [ "$MODE" = "check" ]; then
   echo ""
@@ -104,7 +128,10 @@ if [ "$HAS_HOOK_MOD" -eq 1 ]; then
     echo "   [ERROR] 备份不存在，拒绝盲改钩子。请手工从 OpenClash 安装包取回原厂文件。"
   else
     BAK_MD5=$(md5of "$HOOK_BAK")
-    if [ "$BAK_MD5" != "$STOCK_MD5" ]; then
+    BAK_SHA=$(sha256sum "$HOOK_BAK" 2>/dev/null | cut -d' ' -f1)
+    if [ -n "$ORIG_SHA" ] && [ "$BAK_SHA" != "$ORIG_SHA" ]; then
+      echo "   [ERROR] 备份 sha256 与清单记录不符（$BAK_SHA != $ORIG_SHA），拒绝恢复。"
+    elif [ "$BAK_MD5" != "$STOCK_MD5" ]; then
       echo "   [ERROR] 备份 MD5 与预期原厂值不符（$BAK_MD5 != $STOCK_MD5），拒绝恢复。"
       echo "           备份可能已被污染，请人工核对后再操作。"
     elif cp "$HOOK_BAK" "$HOOK.rollback.$$" && chmod 755 "$HOOK.rollback.$$" \
@@ -197,6 +224,20 @@ if [ -d "$BAKDIR" ]; then
     rm -f "$f"
   done
   echo "   保留最新一份 pre_inject 备份"
+fi
+
+# ---------------------------------------------------------------- 5. install.sh 安装的文件
+if [ -r "$MANIFEST" ]; then
+  grep '^installed ' "$MANIFEST" | while read -r _k _s _p; do
+    [ -f "$_p" ] || continue
+    if [ "$(sha256sum "$_p" 2>/dev/null | cut -d' ' -f1)" = "$_s" ]; then
+      rm -f "$_p" && echo "   已移除 $_p"
+    else
+      echo "   保留 $_p（安装后被改过）"
+    fi
+  done
+  mv -f "$MANIFEST" "$MANIFEST.rolledback.$(date '+%Y%m%d-%H%M%S')" 2>/dev/null
+  echo "   清单已归档；安装前的完整备份仍在 $BAKDIR/install_*"
 fi
 
 echo ""

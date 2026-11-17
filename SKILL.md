@@ -26,23 +26,21 @@ description: 在用户自己的 OpenWrt / OpenClash / Mihomo 路由器上，预�
 
 运行或按 [`docs/workflow.md`](docs/workflow.md) 收集：是否为 OpenWrt / ImmortalWrt、架构、内存与 swap、OpenClash 是否安装、生效配置路径、Mihomo 二进制、Ruby、断网后是否还有带外管理。缺的标「未确认」。不要为了探测而重启服务。把报告给用户看，然后停下。
 
-可用：`./install.sh --check`。
+可用：`./install.sh --check --config <config.yaml>`。
 
 ### 2. 预览将要改动的文件
 
 列出完整路径、将安装或替换的脚本、会不会重启、成功标准、回滚命令。若能在临时目录构建产物，做结构检查；内存足够时才建议全量 `clash -t`。
 
-`./install.sh --dry-run` 目前仍为 **待实现**，脚本会拒绝假装执行。注入预览请用 `CLAUDE_CONFIG=./config.yaml ./scripts/claude_inject.sh --dry-run <配置副本>`。工作脚本在 `scripts/`，不要当成一键安装器，也不要用 `curl | bash` 绕过预览。
+用 `./install.sh --dry-run --config <config.yaml> [--target <生效配置>]`。它列出将安装 / 替换的文件、钩子新旧 sha256、apply 会做的备份、缓存与凭据状态，在 `/tmp` 临时目录渲染注入结果，内存够时跑 `clash -t`，不写 OpenClash 目录。把输出原样给用户看。`build=reject` 表示还没有节点缓存；`预览未通过` 就停下排查，不要进入写入。不要用 `curl | bash` 绕过预览。
 
 ### 3. 等确认
 
 没有用户对这一次预览的明确同意，不要写入，不要重启，不要打开凭据内容。
 
-### 4. 部署（仅在实现完成且用户确认后）
+### 4. 部署（仅在用户确认后）
 
-按 `docs/workflow.md` 的步骤：备份并记录哈希 → 安装用户确认过的文件 → 凭据仍由用户放置 → 仅在同意的窗口重启 → 一步一校验。任一步失败则停止。
-
-通用配置解析和 `--apply` 尚未实现。在此之前，只提交计划和只读检查，不要宣称部署已完成。
+`./install.sh --apply --config <config.yaml>`：它会再预览一遍，用户输入 `yes` 才写入（非交互会话只有在用户明确同意后才加 `--yes`）。它备份钩子与生效配置并记 sha256、装脚本、接钩子、写 `.claude_backup/install.manifest`、做校验，**不重启**。凭据仍由用户放置。没有节点缓存时，在内核运行中先跑一次 `claude_update.sh`。重启 `/etc/init.d/openclash restart` 只在用户同意的维护窗口、由用户确认后执行。任一步失败则停止，按第 6 步回滚。
 
 ### 5. 验证
 
@@ -50,7 +48,7 @@ description: 在用户自己的 OpenWrt / OpenClash / Mihomo 路由器上，预�
 
 ### 6. 失败则回滚
 
-先做回滚检查，把命令给用户看。先恢复钩子并核对备份哈希；失败就停，不继续删凭据或缓存。不自动重启。命令必须来自这次备份，不能来自仓库里写死的占位路径。
+先跑 `sh /etc/openclash/custom/claude_rollback.sh`（只检查），把输出给用户看，确认后再加 `--apply`。它按 install.manifest 核对原始钩子备份的哈希后恢复钩子；失败就停，不继续删凭据或缓存。不自动重启。没有清单时，哈希和路径必须来自这次备份，不能来自仓库里写死的占位路径。
 
 ## 常见坑
 

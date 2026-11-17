@@ -2,7 +2,7 @@
 #
 # scripts/claude_inject.sh 会读取 claude.node_match 与 claude.alias。
 # 没有这两项，注入会拒绝执行（没有内置的默认节点名）。
-# 完整安装器（install.sh --dry-run / --apply）仍为待实现。
+# 安装：./install.sh --check → --dry-run → --apply（确认后写入，不重启）。
 
 claude:
   # 用于在订阅节点里找出要钉死的那一个。按 Ruby 正则匹配节点名，必须恰好命中 1 个。
@@ -20,7 +20,7 @@ router:
   # ssh_key: ~/.ssh/id_ed25519_openclash
 
 openclash:
-  # 留空表示让助手在实机上探测，不要用仓库里的占位符去猜
+  # 生效配置路径。留空时 install.sh 从 uci 读取（openclash.config.config_path），也可以用 --target 指定
   config_path: ""
   custom_dir: /etc/openclash/custom
   core_path: /etc/openclash/core/clash_meta
