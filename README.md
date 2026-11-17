@@ -1,19 +1,32 @@
 <div align="center">
-  <img src="assets/banner.jpg" alt="Claude 纯净 IP 最省钱方案：只让 Claude 走纯净 IP，其余流量走便宜线路" width="100%">
+  <img src="assets/logo.svg" alt="OpenClash Routing Toolkit" width="120" height="120">
 
 # OpenClash Routing Toolkit
 
 只让 Claude 走家宽纯净 IP，其余流量走便宜机场。<br>
 订阅更新、路由器重启，规则还在。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-OpenWrt%20%2F%20OpenClash-1d4ed8.svg)](#限制)
-[![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-0ea5e9.svg)](#快速开始)
-[![Tested](https://img.shields.io/badge/Tested-ImmortalWrt%20aarch64%20%2F%20Mihomo-7c3aed.svg)](#限制)
-[![Install](https://img.shields.io/badge/Install-dry--run%20first-f59e0b.svg)](#快速开始)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-OpenWrt%20%2F%20OpenClash-1d4ed8.svg?style=flat-square)](#限制)
+[![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-0ea5e9.svg?style=flat-square)](#快速开始)
+[![Tested](https://img.shields.io/badge/Tested-ImmortalWrt%20aarch64%20%2F%20Mihomo-7c3aed.svg?style=flat-square)](#限制)
+[![Install](https://img.shields.io/badge/Install-dry--run%20first-f59e0b.svg?style=flat-square)](#快速开始)
 
-[长文介绍](https://x.com/theyiran/status/2122701262991073350)
+<p>
+  <a href="#快速开始">快速开始</a>
+  ·
+  <a href="#工作原理">工作原理</a>
+  ·
+  <a href="#配置">配置</a>
+  ·
+  <a href="#限制">限制</a>
+  ·
+  <a href="https://x.com/theyiran/status/2122701262991073350">长文介绍</a>
+</p>
 
+<p>
+  <img src="assets/gif-a-split.gif" alt="只有 Claude 走贵的那条：家里的设备经 OpenClash 分流，Claude / Anthropic 走家宽纯净 IP，其他流量走便宜机场" width="100%">
+</p>
 </div>
 
 > [!IMPORTANT]
@@ -24,10 +37,6 @@
 为了让 Claude 不封号，很多人把整台路由器都切到纯净 IP。能用，但刷视频、更新游戏、手机后台同步，全都在走那条最贵的线。真正需要干净出口的，其实只有 Claude 那几个域名。
 
 这套脚本做的是：纯净 IP 只买家宽里最便宜的小流量套餐，专门给 Claude 用；其余流量交给随便一个便宜大碗的机场。两边同时挂在 OpenClash 上，该走哪条走哪条。
-
-<p align="center">
-  <img src="assets/gif-a-split.gif" alt="只有 Claude 走贵的那条：家里的设备经 OpenClash 分流，Claude / Anthropic 走家宽纯净 IP，其他流量走便宜机场" width="100%">
-</p>
 
 它不替代 OpenClash 或 Mihomo，也不提供订阅。
 
