@@ -1,0 +1,23 @@
+# User-filled config and credentials — never commit these
+config.yaml
+**/routing_toolkit_sub.yaml
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+.cache/

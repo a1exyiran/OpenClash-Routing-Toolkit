@@ -1,0 +1,35 @@
+# 复制为 config.yaml 后填你自己的值。不要把填好的文件提交进 Git。
+# 本文件的解析与自动落地目前为「待实现」。助手应拿它当清单，而不是假装已经能安装。
+
+router:
+  # 目标主机如何登录，由你在本地提供；不要把密码写在这里
+  host: 192.0.2.1
+  user: root
+  # 可选：已配置好的 SSH 私钥路径
+  # ssh_key: ~/.ssh/id_ed25519_openclash
+
+openclash:
+  # 留空表示让助手在实机上探测，不要用仓库里的占位符去猜
+  config_path: ""
+  custom_dir: /etc/openclash/custom
+  core_path: /etc/openclash/core/clash_meta
+
+# 订阅地址不要写在本文件。指向路由器上权限已收紧的凭据文件。
+credentials:
+  file: /etc/openclash/custom/routing_toolkit_sub.yaml
+  # 文件内容由你放置；助手只检查存在与权限，不把内容读到对话里
+
+policy:
+  # 以下均为示例名，必须改成你自己的组名和规则
+  group_name: dedicated
+  fallback: REJECT
+  domain_suffixes:
+    - example.com
+  # 可选
+  ip_cidrs: []
+  extra_rules: []
+
+deploy:
+  allow_restart: false
+  require_dry_run: true
+  min_mem_available_mb: 190
